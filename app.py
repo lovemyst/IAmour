@@ -51,8 +51,3 @@ def chat():
 @app.route('/')
 def index():
     return "IAmour est en ligne !"
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
-
