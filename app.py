@@ -5,7 +5,7 @@ import openai
 import time
 
 app = Flask(__name__)
-CORS(app)  # Autorise les requêtes cross-origin
+CORS(app, origins=["https://lovable.dev"])  # Autorise uniquement Lovable
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
