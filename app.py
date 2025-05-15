@@ -52,7 +52,4 @@ def chat():
 def index():
     return "IAmour est en ligne !"
 
-except Exception as e:
-    print("Erreur OpenAI :", e)  # Ajoute cette ligne
-    return jsonify({"error": str(e)}), 500
 
