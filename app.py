@@ -3,13 +3,18 @@ from flask_cors import CORS
 import openai
 import os
 import time
+import stripe
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
+# Clés d’environnement
 openai.api_key = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 @app.route('/')
 def home():
@@ -52,6 +57,27 @@ def ask():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/webhook", methods=["POST"])
+def stripe_webhook():
+    payload = request.data
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except stripe.error.SignatureVerificationError:
+        return "Signature invalide", 400
+    except Exception as e:
+        print("Erreur Webhook :", e)
+        return "Erreur Webhook", 400
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        print("Paiement reçu pour :", session.get("customer"))
+
+    return "OK", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
