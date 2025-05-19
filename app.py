@@ -4,17 +4,25 @@ import openai
 import os
 import time
 import stripe
+from datetime import datetime, timedelta
+from supabase import create_client, Client
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Clés d’environnement
+# OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 
+# Stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+# Supabase
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key)
 
 @app.route('/')
 def home():
@@ -75,7 +83,19 @@ def stripe_webhook():
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        print("Paiement reçu pour :", session.get("customer"))
+        customer_id = session.get("customer")
+        
+        # Exemple simple : tous les plans sont "premium" en test
+        abonnement_plan = "premium"
+        fin = (datetime.utcnow() + timedelta(days=30)).isoformat()
+
+        # Met à jour Supabase
+        supabase.table("Abonnés").update({
+            "Abonnement_plan": abonnement_plan,
+            "Fin_de_l_abonnement": fin
+        }).eq("stripe_customer_id", customer_id).execute()
+
+        print(f"Supabase mis à jour pour {customer_id} avec plan {abonnement_plan}")
 
     return "OK", 200
 
