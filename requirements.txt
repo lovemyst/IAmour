@@ -3,3 +3,4 @@ openai
 gunicorn
 flask-cors
 stripe
+supabase
