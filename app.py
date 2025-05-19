@@ -84,18 +84,27 @@ def stripe_webhook():
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         customer_id = session.get("customer")
-        
-        # Exemple simple : tous les plans sont "premium" en test
-        abonnement_plan = "premium"
+        plan = "premium"
         fin = (datetime.utcnow() + timedelta(days=30)).isoformat()
 
-        # Met à jour Supabase
-        supabase.table("Abonnés").update({
-            "Abonnement_plan": abonnement_plan,
-            "Fin_de_l_abonnement": fin
-        }).eq("stripe_customer_id", customer_id).execute()
+        # Vérifie si l'utilisateur existe
+        existing = supabase.table("Abonnés").select("*").eq("stripe_customer_id", customer_id).execute()
 
-        print(f"Supabase mis à jour pour {customer_id} avec plan {abonnement_plan}")
+        if existing.data:
+            # Mise à jour
+            supabase.table("Abonnés").update({
+                "Abonnement_plan": plan,
+                "Fin_de_l_abonnement": fin
+            }).eq("stripe_customer_id", customer_id).execute()
+        else:
+            # Insertion
+            supabase.table("Abonnés").insert({
+                "stripe_customer_id": customer_id,
+                "Abonnement_plan": plan,
+                "Fin_de_l_abonnement": fin
+            }).execute()
+
+        print(f"Supabase mis à jour ou créé pour : {customer_id}")
 
     return "OK", 200
 
