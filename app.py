@@ -104,9 +104,4 @@ def stripe_webhook():
                 "Fin_de_l_abonnement": fin
             }).execute()
 
-        print(f"Supabase mis à jour ou créé pour : {customer_id}")
-
-    return "OK", 200
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+        print(f"Supabase mis à jour ou créé pour
