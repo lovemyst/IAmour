@@ -1,106 +1,79 @@
-CORS
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import openai
 import os
-import time
-import stripe
-from datetime import datetime, timedelta
 from supabase import create_client, Client
 
+# Initialisation de Flask
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app)
 
-# OpenAI
+# Clés d'environnement
 openai.api_key = os.getenv("OPENAI_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 
-# Stripe
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+# Connexion à Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Supabase
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(supabase_url, supabase_key)
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    user_message = data.get("message")
+    user_id = data.get("user_id")
+    is_premium = data.get("isPremium", False)
 
-@app.route('/')
-def home():
-    return "Bienvenue sur l’API IAmour !"
+    if not user_id or not user_message:
+        return jsonify({"error": "user_id and message are required"}), 400
 
-@app.route('/ask', methods=['POST'])
-def ask():
-    try:
-        data = request.json
-        message = data.get('message')
-        is_premium = data.get('premium', False)
+    assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
 
-        assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
-
+    # Vérifie si un thread existe déjà pour cet utilisateur
+    response = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
+    if response.data:
+        thread_id = response.data[0]["thread_id"]
+    else:
+        # Crée un nouveau thread
         thread = openai.beta.threads.create()
+        thread_id = thread.id
 
-        openai.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=message
+        # Enregistre le thread dans Supabase
+        supabase.table("threads").insert({
+            "user_id": user_id,
+            "thread_id": thread_id
+        }).execute()
+
+        print(f"Thread créé pour l'utilisateur {user_id}")
+
+    # Envoie le message de l'utilisateur
+    openai.beta.threads.messages.create(
+        thread_id=thread_id,
+        role="user",
+        content=user_message
+    )
+
+    # Lance l’assistant
+    run = openai.beta.threads.runs.create(
+        thread_id=thread_id,
+        assistant_id=assistant_id
+    )
+
+    # Attend la fin du traitement
+    while True:
+        run_status = openai.beta.threads.runs.retrieve(
+            thread_id=thread_id,
+            run_id=run.id
         )
+        if run_status.status == "completed":
+            break
 
-        run = openai.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=assistant_id
-        )
+    # Récupère la dernière réponse
+    messages = openai.beta.threads.messages.list(thread_id=thread_id)
+    last_message = messages.data[0].content[0].text.value
 
-        while True:
-            run = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-            if run.status == "completed":
-                break
-            elif run.status == "failed":
-                return jsonify({"error": "L'assistant a échoué à répondre."}), 500
-            time.sleep(1)
+    return jsonify({"response": last_message})
 
-        messages = openai.beta.threads.messages.list(thread_id=thread.id)
-        latest_message = messages.data[0].content[0].text.value
-
-        return jsonify({"response": latest_message})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/webhook", methods=["POST"])
-def stripe_webhook():
-    payload = request.data
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, webhook_secret
-        )
-    except stripe.error.SignatureVerificationError:
-        return "Signature invalide", 400
-    except Exception as e:
-        print("Erreur Webhook :", e)
-        return "Erreur Webhook", 400
-
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        customer_id = session.get("customer")
-        plan = "premium"
-        fin = (datetime.utcnow() + timedelta(days=30)).isoformat()
-
-        # Vérifie si l'utilisateur existe
-        existing = supabase.table("Abonnés").select("*").eq("stripe_customer_id", customer_id).execute()
-
-        if existing.data:
-            # Mise à jour
-            supabase.table("Abonnés").update({
-                "Abonnement_plan": plan,
-                "Fin_de_l_abonnement": fin
-            }).eq("stripe_customer_id", customer_id).execute()
-        else:
-            # Insertion
-            supabase.table("Abonnés").insert({
-                "stripe_customer_id": customer_id,
-                "Abonnement_plan": plan,
-                "Fin_de_l_abonnement": fin
-            }).execute()
-
-        print(f"Supabase mis à jour ou créé pour
+if __name__ == '__main__':
+    app.run(debug=True)
