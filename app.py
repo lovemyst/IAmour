@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
 import os
+import time
 from supabase import create_client, Client
 
 # Initialisation de Flask
@@ -45,8 +46,6 @@ def chat():
             "thread_id": thread_id
         }).execute()
 
-        print(f"Thread créé pour l'utilisateur {user_id}")
-
     # Envoie le message de l'utilisateur
     openai.beta.threads.messages.create(
         thread_id=thread_id,
@@ -60,14 +59,23 @@ def chat():
         assistant_id=assistant_id
     )
 
-    # Attend la fin du traitement
-    while True:
+    # Attend la fin du traitement avec timeout
+    max_attempts = 30
+    attempts = 0
+    while attempts < max_attempts:
         run_status = openai.beta.threads.runs.retrieve(
             thread_id=thread_id,
             run_id=run.id
         )
         if run_status.status == "completed":
             break
+        elif run_status.status == "failed":
+            return jsonify({"error": "L'assistant a échoué."}), 500
+        time.sleep(1)
+        attempts += 1
+
+    if attempts == max_attempts:
+        return jsonify({"error": "Temps d’attente dépassé."}), 504
 
     # Récupère la dernière réponse
     messages = openai.beta.threads.messages.list(thread_id=thread_id)
@@ -75,5 +83,8 @@ def chat():
 
     return jsonify({"response": last_message})
 
+
+# Ce bloc permet d’exécuter en local seulement
 if __name__ == '__main__':
-    app.run(debug=True)
+    if os.getenv("RAILWAY_ENVIRONMENT") is None:
+        app.run(debug=True)
