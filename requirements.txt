@@ -1,6 +1,6 @@
 flask
-openai
 gunicorn
 flask-cors
 stripe
 supabase
+openai>=1.14.2
