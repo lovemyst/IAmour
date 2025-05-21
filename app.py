@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+rom flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
 import os
@@ -15,6 +15,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
+VECTOR_STORE_ID_FREE = os.getenv("VECTOR_STORE_ID_FREE")
+VECTOR_STORE_ID_PREMIUM = os.getenv("VECTOR_STORE_ID_PREMIUM")
 
 # Connexion à Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -30,6 +32,7 @@ def chat():
         return jsonify({"error": "user_id and message are required"}), 400
 
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
+    vector_store_id = VECTOR_STORE_ID_PREMIUM if is_premium else VECTOR_STORE_ID_FREE
 
     # Vérifie si un thread existe déjà pour cet utilisateur
     response = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
@@ -46,20 +49,32 @@ def chat():
             "thread_id": thread_id
         }).execute()
 
-    # Envoie le message de l'utilisateur
+        # Amorçage style IAmour
+        openai.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content="Active ton style IAmour : 🗨️ puis 💬, complice, humain, jamais robot. Utilise tes fichiers uniquement si c’est pertinent."
+        )
+
+    # Message utilisateur
     openai.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
-    # Lance l’assistant
+    # Lancer assistant avec file search spécifique
     run = openai.beta.threads.runs.create(
         thread_id=thread_id,
-        assistant_id=assistant_id
+        assistant_id=assistant_id,
+        tool_resources={
+            "file_search": {
+                "vector_store_ids": [vector_store_id]
+            }
+        }
     )
 
-    # Attend la fin du traitement avec timeout
+    # Attente du résultat
     max_attempts = 30
     attempts = 0
     while attempts < max_attempts:
@@ -77,14 +92,13 @@ def chat():
     if attempts == max_attempts:
         return jsonify({"error": "Temps d’attente dépassé."}), 504
 
-    # Récupère la dernière réponse
+    # Récupérer la réponse
     messages = openai.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
 
     return jsonify({"response": last_message})
 
-
-# Ce bloc permet d’exécuter en local seulement
+# Exécution locale
 if __name__ == '__main__':
     if os.getenv("RAILWAY_ENVIRONMENT") is None:
         app.run(debug=True)
