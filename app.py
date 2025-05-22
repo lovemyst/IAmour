@@ -19,9 +19,8 @@ ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 VECTOR_STORE_ID_FREE = os.getenv("VECTOR_STORE_ID_FREE")
 VECTOR_STORE_ID_PREMIUM = os.getenv("VECTOR_STORE_ID_PREMIUM")
 
-# Configuration OpenAI (sans instanciation de OpenAI())
-openai.api_key = OPENAI_API_KEY
-client = openai
+# Configuration OpenAI avec le bon client (nouveau SDK)
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # Connexion à Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
