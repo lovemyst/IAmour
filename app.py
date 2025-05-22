@@ -19,8 +19,11 @@ ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 VECTOR_STORE_ID_FREE = os.getenv("VECTOR_STORE_ID_FREE")
 VECTOR_STORE_ID_PREMIUM = os.getenv("VECTOR_STORE_ID_PREMIUM")
 
-# Connexion OpenAI et Supabase
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+# Configuration OpenAI (sans instanciation de OpenAI())
+openai.api_key = OPENAI_API_KEY
+client = openai
+
+# Connexion à Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @app.route('/chat', methods=['POST'])
