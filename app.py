@@ -16,8 +16,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
-VECTOR_STORE_ID_FREE = os.getenv("VECTOR_STORE_ID_FREE")
-VECTOR_STORE_ID_PREMIUM = os.getenv("VECTOR_STORE_ID_PREMIUM")
 
 # Configuration OpenAI avec le bon client (nouveau SDK)
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -36,7 +34,6 @@ def chat():
         return jsonify({"error": "user_id and message are required"}), 400
 
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
-    vector_store_id = VECTOR_STORE_ID_PREMIUM if is_premium else VECTOR_STORE_ID_FREE
 
     # Vérifie si un thread existe déjà pour cet utilisateur
     response = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
@@ -67,15 +64,10 @@ def chat():
         content=user_message
     )
 
-    # Lancer assistant avec file search spécifique
+    # Lancer assistant (sans tool_resources)
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
-        assistant_id=assistant_id,
-        tool_resources={
-            "file_search": {
-                "vector_store_ids": [vector_store_id]
-            }
-        }
+        assistant_id=assistant_id
     )
 
     # Attente du résultat
