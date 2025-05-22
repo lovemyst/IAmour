@@ -3,4 +3,4 @@ gunicorn  # redeploy
 flask-cors  # redeploy
 stripe   # redeploy
 supabase   # redeploy
-openai==1.18.0  # redeploy
+openai==1.25.0  # redeploy
