@@ -1,4 +1,4 @@
-# Redeploy trigger - 22 mai
+# Force rebuild - 17h10
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
