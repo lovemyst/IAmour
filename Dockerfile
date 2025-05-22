@@ -1,15 +1,19 @@
-# Utilise une image Python légère
+# Utilise une image Python officielle
 FROM python:3.11-slim
 
-# Dossier de travail
+# Définit le répertoire de travail dans le conteneur
 WORKDIR /app
 
-# Installer les dépendances
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copie les fichiers de l'application dans le conteneur
+COPY . /app
 
-# Copier le reste du code
-COPY . .
+# Met à jour pip et installe les dépendances
+RUN pip install --upgrade pip && \
+    pip install openai>=1.17.0 && \
+    pip install -r requirements.txt
 
-# Lancer le serveur Flask via Gunicorn
-CMD ["gunicorn", "app:app"]
+# Expose le port utilisé par l'app Flask
+EXPOSE 8080
+
+# Commande pour démarrer l'application
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080"]
