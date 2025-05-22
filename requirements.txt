@@ -4,4 +4,4 @@ flask-cors
 stripe
 supabase
 openai>=1.17.0
-# redeploy
+# redeploy-for-openai-1.17
