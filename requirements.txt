@@ -3,5 +3,5 @@ gunicorn
 flask-cors
 stripe
 supabase
-openai>=1.17.0
+openai>=1.18.0
 # redeploy-for-openai-1.17
