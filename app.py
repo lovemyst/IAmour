@@ -11,7 +11,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Clés d'environnement
-openai.api_key = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
@@ -19,7 +19,8 @@ ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 VECTOR_STORE_ID_FREE = os.getenv("VECTOR_STORE_ID_FREE")
 VECTOR_STORE_ID_PREMIUM = os.getenv("VECTOR_STORE_ID_PREMIUM")
 
-# Connexion à Supabase
+# Connexion OpenAI et Supabase
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @app.route('/chat', methods=['POST'])
@@ -41,7 +42,7 @@ def chat():
         thread_id = response.data[0]["thread_id"]
     else:
         # Crée un nouveau thread
-        thread = openai.beta.threads.create()
+        thread = client.beta.threads.create()
         thread_id = thread.id
 
         # Enregistre le thread dans Supabase
@@ -51,21 +52,21 @@ def chat():
         }).execute()
 
         # Amorçage style IAmour
-        openai.beta.threads.messages.create(
+        client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
             content="Active ton style IAmour : 🗨️ puis 💬, complice, humain, jamais robot. Utilise tes fichiers uniquement si c’est pertinent."
         )
 
     # Message utilisateur
-    openai.beta.threads.messages.create(
+    client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
     # Lancer assistant avec file search spécifique
-    run = openai.beta.threads.runs.create(
+    run = client.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=assistant_id,
         tool_resources={
@@ -79,7 +80,7 @@ def chat():
     max_attempts = 30
     attempts = 0
     while attempts < max_attempts:
-        run_status = openai.beta.threads.runs.retrieve(
+        run_status = client.beta.threads.runs.retrieve(
             thread_id=thread_id,
             run_id=run.id
         )
@@ -94,7 +95,7 @@ def chat():
         return jsonify({"error": "Temps d’attente dépassé."}), 504
 
     # Récupérer la réponse
-    messages = openai.beta.threads.messages.list(thread_id=thread_id)
+    messages = client.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
 
     return jsonify({"response": last_message})
