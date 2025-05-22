@@ -1,7 +1,7 @@
-# force redeploy
 flask
 gunicorn
 flask-cors
 stripe
 supabase
 openai>=1.17.0
+# redeploy
