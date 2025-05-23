@@ -1,4 +1,4 @@
-# Force rebuild - 17h10
+# Force rebuild - IAmour Version OK
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
@@ -16,8 +16,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
+SYSTEM_PROMPT_FREE = os.getenv("SYSTEM_PROMPT_FREE")
+SYSTEM_PROMPT_PREMIUM = os.getenv("SYSTEM_PROMPT_PREMIUM")
 
-# Configuration OpenAI avec le bon client (nouveau SDK)
+# Configuration OpenAI
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # Connexion à Supabase
@@ -34,50 +36,48 @@ def chat():
         return jsonify({"error": "user_id and message are required"}), 400
 
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
+    system_prompt = SYSTEM_PROMPT_PREMIUM if is_premium else SYSTEM_PROMPT_FREE
 
-    # Vérifie si un thread existe déjà pour cet utilisateur
+    # Vérifie si un thread existe déjà
     response = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
     if response.data:
         thread_id = response.data[0]["thread_id"]
     else:
-        # Crée un nouveau thread
+        # Nouveau thread
         thread = client.beta.threads.create()
         thread_id = thread.id
 
-        # Enregistre le thread dans Supabase
+        # Enregistre le thread
         supabase.table("threads").insert({
             "user_id": user_id,
             "thread_id": thread_id
         }).execute()
 
-        # Amorçage style IAmour
+        # Injecte le prompt système IAmour
         client.beta.threads.messages.create(
             thread_id=thread_id,
-            role="user",
-            content="Active ton style IAmour : 🗨️ puis 💬, complice, humain, jamais robot. Utilise tes fichiers uniquement si c’est pertinent."
+            role="system",
+            content=system_prompt
         )
 
-    # Message utilisateur
+    # Envoie le message utilisateur
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
-    # Lancer assistant (sans tool_resources)
+    # Lance l’assistant
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=assistant_id
     )
 
-    # Attente du résultat
+    # Attend le résultat
     max_attempts = 30
     attempts = 0
     while attempts < max_attempts:
-        run_status = client.beta.threads.runs.retrieve(
-            thread_id=thread_id,
-            run_id=run.id
-        )
+        run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
         if run_status.status == "completed":
             break
         elif run_status.status == "failed":
@@ -88,13 +88,13 @@ def chat():
     if attempts == max_attempts:
         return jsonify({"error": "Temps d’attente dépassé."}), 504
 
-    # Récupérer la réponse
+    # Récupère la réponse
     messages = client.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
 
     return jsonify({"response": last_message})
 
-# Exécution locale
+# Exécution locale uniquement
 if __name__ == '__main__':
     if os.getenv("RAILWAY_ENVIRONMENT") is None:
         app.run(debug=True)
