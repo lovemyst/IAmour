@@ -117,9 +117,10 @@ def chat():
 
     return jsonify({"response": last_message})
 
-# Activation manuelle (pour test uniquement)
+# Test : activer ton propre compte premium (désactivable ensuite)
 make_user_premium("user_1747692922028")  # ← Remplace par ton user_id réel si besoin
 
+# Lancement correct sur Railway (ou en local)
 if __name__ == '__main__':
-    if os.getenv("RAILWAY_ENVIRONMENT") is None:
-        app.run(debug=True)
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
