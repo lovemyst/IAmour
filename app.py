@@ -4,19 +4,18 @@ import openai
 import os
 import time
 
-# Configuration Flask
 app = Flask(__name__)
 CORS(app)
 
-# Variables d’environnement
+# Config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 SYSTEM_PROMPT_PREMIUM = os.getenv("SYSTEM_PROMPT_PREMIUM")
 
-# Connexion à OpenAI
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# Dictionnaire temporaire de threads par utilisateur (en mémoire uniquement pour test)
+# Threads simulés pour tests
 user_threads = {}
 
 @app.route('/chat', methods=['POST'])
@@ -28,16 +27,18 @@ def chat():
     if not user_id or not user_message:
         return jsonify({"error": "user_id and message are required"}), 400
 
-    # ⚡ Forcé : tous les utilisateurs sont traités comme premium
-    is_premium = True
-    assistant_id = ASSISTANT_ID_PREMIUM
+    # ⚡ Forçage pour tests Lovable (ajuste cette liste si besoin)
+    PREMIUM_USER_IDS = ["anonymous_user", "test_admin", "user_1747692922028"]
+    is_premium = user_id in PREMIUM_USER_IDS
+
+    assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
     system_prompt = SYSTEM_PROMPT_PREMIUM
 
+    print("👤 USER_ID reçu :", user_id)
+    print("✨ Premium activé ?", is_premium)
     print("🧠 Assistant utilisé :", assistant_id)
-    print("👤 user_id :", user_id)
-    print("📜 Prompt injecté :", system_prompt)
 
-    # Vérifie si un thread existe déjà (en mémoire pour tests)
+    # Thread en mémoire
     if user_id in user_threads:
         thread_id = user_threads[user_id]
     else:
@@ -45,27 +46,24 @@ def chat():
         thread_id = thread.id
         user_threads[user_id] = thread_id
 
-        # Injecte le style calibré IAmour dès le début
+        # Prompt injecté au début
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
             content=f"[STYLE IAmour ACTIVÉ]\n{system_prompt}"
         )
 
-    # Envoie le message réel de l'utilisateur
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
-    # Lance l'exécution de l'assistant
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=assistant_id
     )
 
-    # Attente de complétion
     max_attempts = 30
     attempts = 0
     while attempts < max_attempts:
@@ -80,15 +78,13 @@ def chat():
     if attempts == max_attempts:
         return jsonify({"error": "Temps d’attente dépassé."}), 504
 
-    # Récupère la réponse
     messages = client.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
 
-    print("💬 Réponse brute de l’IA :", last_message)
+    print("💬 Réponse brute :", last_message)
 
     return jsonify({"response": last_message})
 
-# Lancement de l'application (compatible Railway)
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
