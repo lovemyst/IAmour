@@ -11,7 +11,6 @@ CORS(app)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
-SYSTEM_PROMPT_PREMIUM = os.getenv("SYSTEM_PROMPT_PREMIUM")
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
@@ -32,7 +31,6 @@ def chat():
     is_premium = user_id in PREMIUM_USER_IDS
 
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
-    system_prompt = SYSTEM_PROMPT_PREMIUM
 
     print("👤 USER_ID reçu :", user_id)
     print("✨ Premium activé ?", is_premium)
@@ -45,13 +43,6 @@ def chat():
         thread = client.beta.threads.create()
         thread_id = thread.id
         user_threads[user_id] = thread_id
-
-        # Prompt injecté au début
-        client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role="user",
-            content=f"[STYLE IAmour ACTIVÉ]\n{system_prompt}"
-        )
 
     client.beta.threads.messages.create(
         thread_id=thread_id,
