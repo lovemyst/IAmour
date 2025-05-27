@@ -3,44 +3,21 @@ from flask_cors import CORS
 import openai
 import os
 import time
-from supabase import create_client, Client
 
 # Configuration Flask
 app = Flask(__name__)
 CORS(app)
 
-# Récupération des variables d’environnement
+# Variables d’environnement
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
-SYSTEM_PROMPT_FREE = os.getenv("SYSTEM_PROMPT_FREE")
 SYSTEM_PROMPT_PREMIUM = os.getenv("SYSTEM_PROMPT_PREMIUM")
 
-# Connexions aux services
+# Connexion à OpenAI
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Vérifie si un utilisateur est premium
-def get_is_premium(user_id: str) -> bool:
-    try:
-        response = supabase.table("users").select("is_premium").eq("id", user_id).single().execute()
-        return response.data and response.data.get("is_premium", False)
-    except Exception as e:
-        print(f"Erreur Supabase (vérif premium) : {e}")
-        return False
-
-# Rend un utilisateur premium manuellement
-def make_user_premium(user_id: str):
-    try:
-        response = supabase.table("users").upsert({
-            "id": user_id,
-            "is_premium": True
-        }).execute()
-        print(f"✅ Utilisateur {user_id} activé en premium.")
-    except Exception as e:
-        print(f"❌ Erreur lors de l'activation premium : {e}")
+# Dictionnaire temporaire de threads par utilisateur (en mémoire uniquement pour test)
+user_threads = {}
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -51,44 +28,38 @@ def chat():
     if not user_id or not user_message:
         return jsonify({"error": "user_id and message are required"}), 400
 
-    # Vérifie le statut premium depuis Supabase
-    is_premium = get_is_premium(user_id)
-    assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
-    system_prompt = SYSTEM_PROMPT_PREMIUM if is_premium else SYSTEM_PROMPT_FREE
+    # ⚡ Forcé : tous les utilisateurs sont traités comme premium
+    is_premium = True
+    assistant_id = ASSISTANT_ID_PREMIUM
+    system_prompt = SYSTEM_PROMPT_PREMIUM
 
     print("🧠 Assistant utilisé :", assistant_id)
+    print("👤 user_id :", user_id)
     print("📜 Prompt injecté :", system_prompt)
 
-    # Vérifie si un thread existe pour cet utilisateur
-    response = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
-    if response.data:
-        thread_id = response.data[0]["thread_id"]
+    # Vérifie si un thread existe déjà (en mémoire pour tests)
+    if user_id in user_threads:
+        thread_id = user_threads[user_id]
     else:
-        # Crée un nouveau thread
         thread = client.beta.threads.create()
         thread_id = thread.id
+        user_threads[user_id] = thread_id
 
-        # Sauvegarde le thread
-        supabase.table("threads").insert({
-            "user_id": user_id,
-            "thread_id": thread_id
-        }).execute()
-
-        # Injecte le prompt calibré (debug initial)
+        # Injecte le style calibré IAmour dès le début
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
             content=f"[STYLE IAmour ACTIVÉ]\n{system_prompt}"
         )
 
-    # Message utilisateur
+    # Envoie le message réel de l'utilisateur
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
-    # Lance l'exécution
+    # Lance l'exécution de l'assistant
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=assistant_id
@@ -117,10 +88,7 @@ def chat():
 
     return jsonify({"response": last_message})
 
-# Test : activer ton propre compte premium (désactivable ensuite)
-make_user_premium("user_1747692922028")  # ← Remplace par ton user_id réel si besoin
-
-# Lancement correct sur Railway (ou en local)
+# Lancement de l'application (compatible Railway)
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
