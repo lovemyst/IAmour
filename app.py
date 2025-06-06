@@ -23,7 +23,7 @@ def chat():
     user_message = data.get("message")
     user_id = data.get("user_id")
 
-    # Préférences émotionnelles
+    # Préférences émotionnelles depuis le frontend Lovable
     tonalite = data.get("tonalite", "douce")
     intensite = data.get("intensite", "moderee")
     longueur = data.get("longueur", "moyenne")
@@ -33,10 +33,16 @@ def chat():
     if not user_id or not user_message:
         return jsonify({"error": "user_id and message are required"}), 400
 
+    # Gestion premium
     PREMIUM_USER_IDS = ["anonymous_user", "test_admin", "user_1747692922028"]
     is_premium = user_id in PREMIUM_USER_IDS
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
 
+    print("👤 USER_ID reçu :", user_id)
+    print("✨ Premium activé ?", is_premium)
+    print("🧠 Assistant utilisé :", assistant_id)
+
+    # Gestion du thread utilisateur
     if user_id in user_threads:
         thread_id = user_threads[user_id]
     else:
@@ -44,34 +50,30 @@ def chat():
         thread_id = thread.id
         user_threads[user_id] = thread_id
 
-    # 💡 INJECTION DU MESSAGE SYSTÈME avec préférences
-    system_message = f"""
-    Préférences utilisateur :
-    – Tonalité : {tonalite}
-    – Intensité émotionnelle : {intensite}
-    – Longueur des réponses : {longueur}
-    – Personnalité IA : {personnalite}
-    – Humeur : {humeur}
-    Ces paramètres doivent adapter dynamiquement chaque réponse.
-    """
-    client.beta.threads.messages.create(
-        thread_id=thread_id,
-        role="system",
-        content=system_message
-    )
-
-    # Message utilisateur
+    # Envoi du message utilisateur
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_message
     )
 
+    # Injection dynamique des préférences dans instructions
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
-        assistant_id=assistant_id
+        assistant_id=assistant_id,
+        instructions=f"""
+Préférences utilisateur :
+- Tonalité : {tonalite}
+- Intensité émotionnelle : {intensite}
+- Longueur des réponses : {longueur}
+- Personnalité IA : {personnalite}
+- Humeur : {humeur}
+
+Ces paramètres doivent adapter dynamiquement chaque réponse.
+"""
     )
 
+    # Attente de la complétion
     max_attempts = 30
     attempts = 0
     while attempts < max_attempts:
@@ -89,6 +91,7 @@ def chat():
     messages = client.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
 
+    print("💬 Réponse brute :", last_message)
     return jsonify({"response": last_message})
 
 if __name__ == '__main__':
