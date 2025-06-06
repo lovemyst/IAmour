@@ -23,7 +23,7 @@ def chat():
     user_message = data.get("message")
     user_id = data.get("user_id")
 
-    # Préférences Lovable avec valeurs par défaut
+    # Préférences émotionnelles
     tonalite = data.get("tonalite", "douce")
     intensite = data.get("intensite", "moderee")
     longueur = data.get("longueur", "moyenne")
@@ -37,10 +37,6 @@ def chat():
     is_premium = user_id in PREMIUM_USER_IDS
     assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
 
-    print("👤 USER_ID reçu :", user_id)
-    print("✨ Premium activé ?", is_premium)
-    print("🧠 Assistant utilisé :", assistant_id)
-
     if user_id in user_threads:
         thread_id = user_threads[user_id]
     else:
@@ -48,22 +44,23 @@ def chat():
         thread_id = thread.id
         user_threads[user_id] = thread_id
 
-    # 🧠 Injection message système avec préférences
+    # 💡 INJECTION DU MESSAGE SYSTÈME avec préférences
+    system_message = f"""
+    Préférences utilisateur :
+    – Tonalité : {tonalite}
+    – Intensité émotionnelle : {intensite}
+    – Longueur des réponses : {longueur}
+    – Personnalité IA : {personnalite}
+    – Humeur : {humeur}
+    Ces paramètres doivent adapter dynamiquement chaque réponse.
+    """
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="system",
-        content=f"""
-Préférences utilisateur :
-- Tonalité : {tonalite}
-- Intensité émotionnelle : {intensite}
-- Longueur des réponses : {longueur}
-- Personnalité IA : {personnalite}
-- Humeur : {humeur}
-Ces paramètres doivent adapter dynamiquement chaque réponse de l’IA.
-"""
+        content=system_message
     )
 
-    # 🗣 Message utilisateur
+    # Message utilisateur
     client.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
@@ -91,8 +88,6 @@ Ces paramètres doivent adapter dynamiquement chaque réponse de l’IA.
 
     messages = client.beta.threads.messages.list(thread_id=thread_id)
     last_message = messages.data[0].content[0].text.value
-
-    print("💬 Réponse brute :", last_message)
 
     return jsonify({"response": last_message})
 
