@@ -1,8 +1,10 @@
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
 import os
 import time
+from module_iaamour_comprehension import analyse_profil_utilisateur
 
 app = Flask(__name__)
 CORS(app)
@@ -33,6 +35,9 @@ def chat():
     if not user_id or not user_message:
         return jsonify({"error": "user_id and message are required"}), 400
 
+    # Analyse du message utilisateur pour enrichir les instructions
+    profil = analyse_profil_utilisateur(user_message)
+
     # Gestion premium
     PREMIUM_USER_IDS = ["anonymous_user", "test_admin", "user_1747692922028"]
     is_premium = user_id in PREMIUM_USER_IDS
@@ -41,6 +46,7 @@ def chat():
     print("👤 USER_ID reçu :", user_id)
     print("✨ Premium activé ?", is_premium)
     print("🧠 Assistant utilisé :", assistant_id)
+    print("🔎 Profil comportemental détecté :", profil)
 
     # Gestion du thread utilisateur
     if user_id in user_threads:
@@ -57,20 +63,28 @@ def chat():
         content=user_message
     )
 
-    # Injection dynamique des préférences dans instructions
+    # Enrichissement des instructions
     run = client.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=assistant_id,
-        instructions=f"""
-Préférences utilisateur :
+        instructions=f'''
+Préférences utilisateur (via interface Lovable) :
 - Tonalité : {tonalite}
 - Intensité émotionnelle : {intensite}
 - Longueur des réponses : {longueur}
 - Personnalité IA : {personnalite}
 - Humeur : {humeur}
 
-Ces paramètres doivent adapter dynamiquement chaque réponse.
-"""
+Profil comportemental détecté (via IA interne) :
+- Âge estimé : {profil['âge_estimé']}
+- Niveau de langage : {profil['niveau_langage']}
+- Ton émotionnel : {profil['ton']}
+- Style IA recommandé : {profil['style']}
+- Besoin implicite : {profil['besoin']}
+- Tendance émotionnelle globale : {profil['tendance']}
+
+⚠️ Ces éléments doivent être utilisés pour personnaliser **chaque mot de la réponse**.
+'''
     )
 
     # Attente de la complétion
