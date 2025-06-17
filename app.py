@@ -18,7 +18,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Thread mémoire par user
+# 🔁 THREAD
 def get_or_create_thread(user_id):
     result = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
     if result.data and len(result.data) > 0:
@@ -32,7 +32,7 @@ def get_or_create_thread(user_id):
         }).execute()
         return thread_id
 
-# Mémoire affective par user
+# 🧠 MÉMOIRE AFFECTIVE
 def get_user_memory(user_id):
     result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
     if result.data and len(result.data) > 0:
@@ -88,14 +88,12 @@ Si longueur = "longue" ➜ Jusqu’à 10 phrases max.
 Réponds avec un style incarné, humain, fidèle à l’émotion détectée.
 """
 
-        # Ajout message
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
             content=user_message
         )
 
-        # Lancement run
         run = client.beta.threads.runs.create(
             thread_id=thread_id,
             assistant_id=assistant_id,
@@ -112,6 +110,33 @@ Réponds avec un style incarné, humain, fidèle à l’émotion détectée.
         response = messages.data[0].content[0].text.value
 
         return jsonify({"response": response})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 🔄 ENDPOINT DE MISE À JOUR MÉMOIRE AFFECTIVE
+@app.route('/update_memory', methods=['POST'])
+def update_memory():
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id")
+
+        fields = {
+            "prenom_aime": data.get("prenom_aime"),
+            "situation_amour": data.get("situation_amour"),
+            "style_relationnel": data.get("style_relationnel"),
+            "intention": data.get("intention"),
+            "updated_at": "now()"
+        }
+
+        existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+        if existing.data and len(existing.data) > 0:
+            supabase.table("user_memory").update(fields).eq("user_id", user_id).execute()
+        else:
+            fields["user_id"] = user_id
+            supabase.table("user_memory").insert(fields).execute()
+
+        return jsonify({"success": True, "message": "Mémoire mise à jour"})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
