@@ -7,7 +7,7 @@ import time
 app = Flask(__name__)
 CORS(app)
 
-# Configuration clés API et assistants
+# Configuration des clés API et assistants
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
@@ -16,54 +16,57 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.get_json()
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id")
+        user_message = data.get("message")
+        preferences = data.get("preferences", {})  # tonalité, intensité, longueur, etc.
 
-    user_id = data.get("user_id")
-    user_message = data.get("message")
-    preferences = data.get("preferences", {})  # tonalité, intensité, longueur, etc.
+        # Sélection de l'assistant selon le statut utilisateur
+        assistant_id = ASSISTANT_ID_PREMIUM if data.get("premium") else ASSISTANT_ID_FREE
 
-    # Sélection assistant selon statut utilisateur
-    assistant_id = ASSISTANT_ID_PREMIUM if data.get("premium") else ASSISTANT_ID_FREE
-
-    # Instructions dynamiques (ton, intensité, humeur, etc.)
-    instructions = f"""
-Tu es IAmour, une intelligence émotionnelle incarnée. 
-Voici les préférences de l’utilisateur : 
+        # Construction des instructions dynamiques
+        instructions = f"""
+Tu es IAmour, une intelligence émotionnelle incarnée.
+Voici les préférences de l’utilisateur :
 - Tonalité : {preferences.get("tonalite")}
-- Intensité : {preferences.get("intensite")}
+- Intensité émotionnelle : {preferences.get("intensite")}
 - Longueur : {preferences.get("longueur")}
-- Humeur : {preferences.get("humeur")}
+- Humeur actuelle : {preferences.get("humeur")}
 - Personnalité IA : {preferences.get("personnalite")}
-Réponds avec une présence humaine, émotionnelle, fidèle à la personnalité sélectionnée.
+Réponds avec chaleur, humanité, et cohérence avec la personnalité sélectionnée.
 """
 
-    # Création ou récupération du thread utilisateur
-    thread = client.beta.threads.create()
-    thread_id = thread.id
+        # Création d’un nouveau thread
+        thread = client.beta.threads.create()
+        thread_id = thread.id
 
-    # Ajout du message utilisateur
-    client.beta.threads.messages.create(
-        thread_id=thread_id,
-        role="user",
-        content=user_message
-    )
+        # Ajout du message utilisateur au thread
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=user_message
+        )
 
-    # Lancement du run
-    run = client.beta.threads.runs.create(
-        thread_id=thread_id,
-        assistant_id=assistant_id,
-        instructions=instructions
-    )
+        # Lancement du run
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            instructions=instructions
+        )
 
-    # Attente réponse
-    while True:
-        run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-        if run_status.status == "completed":
-            break
-        time.sleep(1)
+        # Attente de la réponse
+        while True:
+            run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+            if run_status.status == "completed":
+                break
+            time.sleep(1)
 
-    # Récupération réponse finale
-    messages = client.beta.threads.messages.list(thread_id=thread_id)
-    response = messages.data[0].content[0].text.value
+        # Récupération de la réponse finale
+        messages = client.beta.threads.messages.list(thread_id=thread_id)
+        response = messages.data[0].content[0].text.value
 
-    return jsonify({"response": response})
+        return jsonify({"response": response})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
