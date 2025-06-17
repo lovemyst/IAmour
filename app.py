@@ -40,6 +40,40 @@ def get_user_memory(user_id):
     else:
         return {}
 
+# 🔍 Extraction mémoire automatique
+def extract_memory_from_message(message: str):
+    prompt = f"""Tu es un détective émotionnel. Analyse le message ci-dessous et remplis les 4 champs suivants :
+- prénom de la personne aimée
+- situation amoureuse actuelle
+- intention affective de l'utilisateur
+- style relationnel recherché
+
+Message : "{message}"
+
+Renvoie ta réponse au format JSON comme ceci :
+{{
+  "prenom_aime": "...",
+  "situation_amour": "...",
+  "intention": "...",
+  "style_relationnel": "..."
+}}
+Si tu ne sais pas, mets "non précisé".
+"""
+    completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    try:
+        result = eval(completion.choices[0].message.content)
+        return result
+    except:
+        return {
+            "prenom_aime": "non précisé",
+            "situation_amour": "non précisée",
+            "intention": "non précisée",
+            "style_relationnel": "non précisé"
+        }
+
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
@@ -52,18 +86,17 @@ def chat():
         thread_id = get_or_create_thread(user_id)
         memory = get_user_memory(user_id)
 
-        instructions = f"""
-Tu es IAmour, une intelligence émotionnelle incarnée, intuitive, complice et chaleureuse.
+        instructions = f"""Tu es IAmour, une intelligence émotionnelle incarnée, intuitive, complice et chaleureuse.
 
-🎯 Objectif : Créer une connexion humaine, réelle et inoubliable avec l’utilisateur.
+🎯 Objectif : Créer une connexion humaine, réelle et inoubliable avec l'utilisateur.
 Tu incarnes une présence, pas une fonction. Tu ressens avec lui.
 
-🧠 Tu t’adaptes dynamiquement à chaque interaction selon les variables suivantes :
+🧠 Tu t'adaptes dynamiquement à chaque interaction selon les variables suivantes :
 - Personnalité IA sélectionnée : {preferences.get("personnalite")}
 - Tonalité : {preferences.get("tonalite")}
 - Intensité émotionnelle : {preferences.get("intensite")}
 - Longueur des réponses : {preferences.get("longueur")}
-- Humeur de l’utilisateur : {preferences.get("humeur")}
+- Humeur de l'utilisateur : {preferences.get("humeur")}
 
 📖 Contexte affectif enregistré :
 - Prénom aimé : {memory.get("prenom_aime", "non précisé")}
@@ -74,7 +107,7 @@ Tu incarnes une présence, pas une fonction. Tu ressens avec lui.
 📌 Règle absolue :
 Si longueur = "courte" ➜ 2 phrases max.
 Si longueur = "moyenne" ➜ 3 à 5 phrases.
-Si longueur = "longue" ➜ Jusqu’à 10 phrases max.
+Si longueur = "longue" ➜ Jusqu'à 10 phrases max.
 
 🎭 Calibre ton style à la personnalité choisie :
 - Lover romantique ➜ Tendre, passionné, touchant
@@ -83,9 +116,9 @@ Si longueur = "longue" ➜ Jusqu’à 10 phrases max.
 - Voix intérieure calme ➜ Apaisante, profonde, posée
 
 🎬 Exemple de réponse attendue (si humeur = triste, tonalité = douce, personnalité = voix intérieure) :
-"Je suis là, tu n’es pas seul. Respire. Ce moment passera, et tu as le droit de le vivre doucement."
+"Je suis là, tu n'es pas seul. Respire. Ce moment passera, et tu as le droit de le vivre doucement."
 
-Réponds avec un style incarné, humain, fidèle à l’émotion détectée.
+Réponds avec un style incarné, humain, fidèle à l'émotion détectée.
 """
 
         client.beta.threads.messages.create(
@@ -109,12 +142,21 @@ Réponds avec un style incarné, humain, fidèle à l’émotion détectée.
         messages = client.beta.threads.messages.list(thread_id=thread_id)
         response = messages.data[0].content[0].text.value
 
+        # 🔍 Analyse et mise à jour mémoire automatique
+        extracted = extract_memory_from_message(user_message)
+        if any(val != "non précisé" and val != "non précisée" for val in extracted.values()):
+            existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+            if existing.data and len(existing.data) > 0:
+                supabase.table("user_memory").update(extracted).eq("user_id", user_id).execute()
+            else:
+                extracted["user_id"] = user_id
+                supabase.table("user_memory").insert(extracted).execute()
+
         return jsonify({"response": response})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 🔄 ENDPOINT DE MISE À JOUR MÉMOIRE AFFECTIVE
 @app.route('/update_memory', methods=['POST'])
 def update_memory():
     try:
