@@ -26,9 +26,10 @@ def get_or_create_thread(user_id):
     else:
         thread = client.beta.threads.create()
         thread_id = thread.id
-        supabase.table("user_threads").insert({
+        supabase.table("user_threads").upsert({
             "user_id": user_id,
-            "thread_id": thread_id
+            "thread_id": thread_id,
+            "created_at": "now()"
         }).execute()
         return thread_id
 
@@ -142,7 +143,6 @@ Réponds avec un style incarné, humain, fidèle à l'émotion détectée.
         messages = client.beta.threads.messages.list(thread_id=thread_id)
         response = messages.data[0].content[0].text.value
 
-        # 🔍 Analyse et mise à jour mémoire automatique
         extracted = extract_memory_from_message(user_message)
         if any(val != "non précisé" and val != "non précisée" for val in extracted.values()):
             existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
