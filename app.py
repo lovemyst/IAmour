@@ -3,7 +3,14 @@ from flask_cors import CORS
 import openai
 import os
 import time
+import json
 from supabase import create_client, Client
+import logging
+import sys
+
+# Pour afficher les erreurs dans Railway
+logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
+sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
 
 app = Flask(__name__)
 CORS(app)
@@ -20,25 +27,33 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # 🔁 THREAD
 def get_or_create_thread(user_id):
-    result = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
-    if result.data and len(result.data) > 0:
-        return result.data[0]['thread_id']
-    else:
-        thread = client.beta.threads.create()
-        thread_id = thread.id
-        supabase.table("user_threads").upsert({
-            "user_id": user_id,
-            "thread_id": thread_id,
-            "created_at": "now()"
-        }).execute()
-        return thread_id
+    try:
+        result = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
+        if result.data and len(result.data) > 0:
+            return result.data[0]['thread_id']
+        else:
+            thread = client.beta.threads.create()
+            thread_id = thread.id
+            supabase.table("user_threads").upsert({
+                "user_id": user_id,
+                "thread_id": thread_id,
+                "created_at": "now()"
+            }).execute()
+            return thread_id
+    except Exception as e:
+        logging.error(f"Erreur thread: {e}")
+        return None
 
 # 🧠 MÉMOIRE AFFECTIVE
 def get_user_memory(user_id):
-    result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-    if result.data and len(result.data) > 0:
-        return result.data[0]
-    else:
+    try:
+        result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        else:
+            return {}
+    except Exception as e:
+        logging.error(f"Erreur mémoire utilisateur: {e}")
         return {}
 
 # 🔍 Extraction mémoire automatique
@@ -51,7 +66,7 @@ def extract_memory_from_message(message: str):
 
 Message : "{message}"
 
-Renvoie ta réponse au format JSON comme ceci :
+Renvoie ta réponse au format JSON comme ceci, sans aucun texte autour :
 {{
   "prenom_aime": "...",
   "situation_amour": "...",
@@ -59,15 +74,18 @@ Renvoie ta réponse au format JSON comme ceci :
   "style_relationnel": "..."
 }}
 Si tu ne sais pas, mets "non précisé".
+IMPORTANT : ne renvoie que le JSON, sans aucun commentaire ni texte autour.
 """
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}]
-    )
     try:
-        result = eval(completion.choices[0].message.content)
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        result_str = completion.choices[0].message.content.strip()
+        result = json.loads(result_str)
         return result
-    except:
+    except Exception as e:
+        logging.error(f"Erreur extraction mémoire: {e}")
         return {
             "prenom_aime": "non précisé",
             "situation_amour": "non précisée",
@@ -85,6 +103,9 @@ def chat():
 
         assistant_id = ASSISTANT_ID_PREMIUM if data.get("premium") else ASSISTANT_ID_FREE
         thread_id = get_or_create_thread(user_id)
+        if thread_id is None:
+            return jsonify({"error": "Erreur lors de la création du thread"}), 500
+
         memory = get_user_memory(user_id)
 
         instructions = f"""Tu es IAmour, une intelligence émotionnelle incarnée, intuitive, complice et chaleureuse.
@@ -122,39 +143,53 @@ Si longueur = "longue" ➜ Jusqu'à 10 phrases max.
 Réponds avec un style incarné, humain, fidèle à l'émotion détectée.
 """
 
-        client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role="user",
-            content=user_message
-        )
+        try:
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=user_message
+            )
+        except Exception as e:
+            return jsonify({"error": f"Erreur message OpenAI : {str(e)}"}), 500
 
-        run = client.beta.threads.runs.create(
-            thread_id=thread_id,
-            assistant_id=assistant_id,
-            instructions=instructions
-        )
+        try:
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                instructions=instructions
+            )
+        except Exception as e:
+            return jsonify({"error": f"Erreur création run : {str(e)}"}), 500
 
-        while True:
+        for _ in range(60):
             run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
             if run_status.status == "completed":
                 break
+            elif run_status.status == "failed":
+                return jsonify({"error": "L'exécution a échoué"}), 500
             time.sleep(1)
+        else:
+            return jsonify({"error": "Temps d'attente dépassé"}), 504
 
         messages = client.beta.threads.messages.list(thread_id=thread_id)
         response = messages.data[0].content[0].text.value
 
         extracted = extract_memory_from_message(user_message)
         if any(val != "non précisé" and val != "non précisée" for val in extracted.values()):
-            existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-            if existing.data and len(existing.data) > 0:
-                supabase.table("user_memory").update(extracted).eq("user_id", user_id).execute()
-            else:
-                extracted["user_id"] = user_id
-                supabase.table("user_memory").insert(extracted).execute()
+            try:
+                existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+                if existing.data and len(existing.data) > 0:
+                    supabase.table("user_memory").update(extracted).eq("user_id", user_id).execute()
+                else:
+                    extracted["user_id"] = user_id
+                    supabase.table("user_memory").insert(extracted).execute()
+            except Exception as e:
+                logging.error(f"Erreur mise à jour mémoire : {e}")
 
         return jsonify({"response": response})
 
     except Exception as e:
+        logging.error(f"Erreur route /chat : {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/update_memory', methods=['POST'])
@@ -181,4 +216,5 @@ def update_memory():
         return jsonify({"success": True, "message": "Mémoire mise à jour"})
 
     except Exception as e:
+        logging.error(f"Erreur route /update_memory : {e}")
         return jsonify({"error": str(e)}), 500
