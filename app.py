@@ -8,15 +8,14 @@ from supabase import create_client, Client
 import logging
 import sys
 
-# Logger pour Railway
+# Configuration pour Railway (logs visibles)
 logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
 sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
 
-# Initialisation app Flask
 app = Flask(__name__)
 CORS(app)
 
-# Configuration API & Supabase
+# Clés API et configuration environnement
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
@@ -26,91 +25,98 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Thread user
+# 🔁 Gestion des threads OpenAI
 def get_or_create_thread(user_id):
-    response = supabase.table("threads").select("*").eq("user_id", user_id).execute()
-    if response.data:
+    response = supabase.table("user_threads").select("thread_id").eq("user_id", user_id).execute()
+    if response.data and len(response.data) > 0:
         return response.data[0]["thread_id"]
     else:
         thread = client.beta.threads.create()
-        supabase.table("threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
+        supabase.table("user_threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
         return thread.id
 
-# RÃ©cupÃ©ration des prÃ©fÃ©rences utilisateur
-def get_user_settings(user_id):
-    response = supabase.table("user_settings").select("*").eq("user_id", user_id).execute()
-    if response.data:
-        return response.data[0]
-    else:
-        return {}
+# 🔧 Route de santé
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "OK"}), 200
 
-# ROUTE /chat
+# 🧠 Route pour mettre à jour la mémoire utilisateur (Supabase)
+@app.route("/update_memory", methods=["POST"])
+def update_memory():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    memory = {
+        "prenom_aime": data.get("prenom_aime"),
+        "situation_amoureuse": data.get("situation_amoureuse"),
+        "intention_relationnelle": data.get("intention_relationnelle"),
+        "style_relationnel": data.get("style_relationnel")
+    }
+
+    response = supabase.table("user_settings").upsert({
+        "user_id": user_id,
+        **memory
+    }).execute()
+    return jsonify({"status": "memory updated", "data": response.data}), 200
+
+# 💬 Route principale pour converser avec l'IA
 @app.route("/chat", methods=["POST"])
 def chat():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    message = data.get("message")
+    preferences = data.get("preferences", {})
+
+    # Récupération du bon assistant
+    assistant_id = ASSISTANT_ID_PREMIUM if data.get("is_premium") else ASSISTANT_ID_FREE
+
+    # Récupération du thread
+    thread_id = get_or_create_thread(user_id)
+
+    # Injection dynamique des préférences dans le prompt
+    dynamic_instructions = f"""
+Tu es l’IA IAmour. Adapte-toi immédiatement aux préférences suivantes :
+Tonalité : {preferences.get("tonalite")}
+Intensité émotionnelle : {preferences.get("intensite")}
+Longueur : {preferences.get("longueur")}
+Humeur : {preferences.get("humeur")}
+Personnalité : {preferences.get("personnalite")}
+Réponds toujours de manière incarnée, émotionnelle et fidèle à la demande de l’utilisateur.
+    """.strip()
+
     try:
-        data = request.json
-        user_id = data.get("user_id")
-        user_message = data.get("message", "")
-        settings = data.get("settings", {})
-        use_premium = data.get("use_premium", False)
+        # Création du message
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=message
+        )
 
-        assistant_id = ASSISTANT_ID_PREMIUM if use_premium else ASSISTANT_ID_FREE
-        thread_id = get_or_create_thread(user_id)
-        user_settings = get_user_settings(user_id)
+        # Lancement de l'exécution avec prompt dynamique
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            instructions=dynamic_instructions
+        )
 
-        instructions = json.dumps({
-            "preferences": settings,
-            "memory": {
-                "relation_intent": user_settings.get("relation_intent"),
-                "love_name": user_settings.get("love_name"),
-                "love_style": user_settings.get("love_style"),
-                "status": user_settings.get("status")
-            }
-        })
-
-        client.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_message)
-        run = client.beta.threads.runs.create(thread_id=thread_id, assistant_id=assistant_id, instructions=instructions)
-
-        # Attente de la rÃ©ponse
-        for _ in range(30):
+        # Attente de la complétion
+        while True:
             run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-            if run_status.status == "completed":
+            if run_status.status in ["completed", "failed", "cancelled"]:
                 break
             time.sleep(1)
 
+        # Récupération du dernier message IA
         messages = client.beta.threads.messages.list(thread_id=thread_id)
-        last_message = messages.data[0].content[0].text.value if messages.data else "Aucune rÃ©ponse gÃ©nÃ©rÃ©e."
-
-        return jsonify({"response": last_message})
+        last_message = next(
+            (m for m in reversed(messages.data) if m.role == "assistant"),
+            {"content": [{"text": {"value": "Je n’ai pas pu générer de réponse."}}]}
+        )
+        final_text = last_message["content"][0]["text"]["value"]
+        return jsonify({"response": final_text}), 200
 
     except Exception as e:
-        logging.error(f"Erreur /chat : {e}")
+        logging.error(f"Erreur dans /chat : {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ROUTE /health
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-# ROUTE /update_memory
-@app.route("/update_memory", methods=["POST"])
-def update_memory():
-    try:
-        data = request.json
-        user_id = data.get("user_id")
-        memory_fields = {
-            "relation_intent": data.get("relation_intent"),
-            "love_name": data.get("love_name"),
-            "love_style": data.get("love_style"),
-            "status": data.get("status")
-        }
-
-        response = supabase.table("user_settings").upsert({**memory_fields, "user_id": user_id}).execute()
-        return jsonify({"status": "success", "data": response.data})
-    except Exception as e:
-        logging.error(f"Erreur /update_memory : {e}")
-        return jsonify({"error": str(e)}), 500
-
-# ExÃ©cution locale pour debug ou via Gunicorn en prod
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8080)
+    app.run(debug=True)
