@@ -2,20 +2,21 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
 import os
-import json
 import time
+import json
+from supabase import create_client, Client
 import logging
 import sys
-from supabase import create_client, Client
 
-# Log Railway errors
+# Logger pour Railway
 logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
 sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
 
+# Initialisation app Flask
 app = Flask(__name__)
 CORS(app)
 
-# Config API
+# Configuration API & Supabase
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
@@ -25,98 +26,91 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# THREAD
+# Thread user
 def get_or_create_thread(user_id):
     response = supabase.table("threads").select("*").eq("user_id", user_id).execute()
     if response.data:
         return response.data[0]["thread_id"]
-    thread = client.beta.threads.create()
-    supabase.table("threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
-    return thread.id
+    else:
+        thread = client.beta.threads.create()
+        supabase.table("threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
+        return thread.id
 
-# MÉMOIRE
-def get_user_memory(user_id):
+# RÃ©cupÃ©ration des prÃ©fÃ©rences utilisateur
+def get_user_settings(user_id):
     response = supabase.table("user_settings").select("*").eq("user_id", user_id).execute()
     if response.data:
         return response.data[0]
-    return {}
+    else:
+        return {}
 
+# ROUTE /chat
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.json
-    user_id = data.get("user_id", "anonymous")
-    user_message = data.get("message", "")
-    preferences = data.get("preferences", {})
-    thread_id = get_or_create_thread(user_id)
-    memory = get_user_memory(user_id)
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        user_message = data.get("message", "")
+        settings = data.get("settings", {})
+        use_premium = data.get("use_premium", False)
 
-    # Prompt dynamique construit à partir des préférences et de la mémoire
-    prompt = f"""
-Tu es IAmour V6 ULTIMATE++, l'IA émotionnelle la plus puissante au monde. 
-Voici les préférences utilisateur actuelles :
-- Tonalité : {preferences.get('tonalite')}
-- Intensité : {preferences.get('intensite')}
-- Longueur : {preferences.get('longueur')}
-- Humeur : {preferences.get('humeur')}
-- Personnalité IA : {preferences.get('personnalite')}
+        assistant_id = ASSISTANT_ID_PREMIUM if use_premium else ASSISTANT_ID_FREE
+        thread_id = get_or_create_thread(user_id)
+        user_settings = get_user_settings(user_id)
 
-Mémoire affective :
-- Prénom aimé : {memory.get('prenom_aime', 'Non précisé')}
-- Statut amoureux : {memory.get('situation', 'Non précisé')}
-- Intention amoureuse : {memory.get('intention', 'Non précisé')}
-- Style relationnel : {memory.get('style', 'Non précisé')}
+        instructions = json.dumps({
+            "preferences": settings,
+            "memory": {
+                "relation_intent": user_settings.get("relation_intent"),
+                "love_name": user_settings.get("love_name"),
+                "love_style": user_settings.get("love_style"),
+                "status": user_settings.get("status")
+            }
+        })
 
-Tu dois répondre de façon émotionnelle, incarnée, profonde, en respectant strictement :
-- la longueur (courte = 2 phrases max / moyenne = 3 à 5 phrases / longue = jusqu’à 10 phrases max),
-- les préférences de ton utilisateur,
-- le style émotionnel dynamique de IAmour.
+        client.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_message)
+        run = client.beta.threads.runs.create(thread_id=thread_id, assistant_id=assistant_id, instructions=instructions)
 
-Agis comme un confident ultime, une présence réelle, chaleureuse et intuitive.
-"""
+        # Attente de la rÃ©ponse
+        for _ in range(30):
+            run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+            if run_status.status == "completed":
+                break
+            time.sleep(1)
 
-    # Envoi du message à l’assistant OpenAI
-    client.beta.threads.messages.create(
-        thread_id=thread_id,
-        role="user",
-        content=user_message
-    )
+        messages = client.beta.threads.messages.list(thread_id=thread_id)
+        last_message = messages.data[0].content[0].text.value if messages.data else "Aucune rÃ©ponse gÃ©nÃ©rÃ©e."
 
-    run = client.beta.threads.runs.create(
-        thread_id=thread_id,
-        assistant_id=ASSISTANT_ID_PREMIUM,
-        instructions=prompt
-    )
+        return jsonify({"response": last_message})
 
-    while True:
-        status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-        if status.status == "completed":
-            break
-        time.sleep(1)
+    except Exception as e:
+        logging.error(f"Erreur /chat : {e}")
+        return jsonify({"error": str(e)}), 500
 
-    messages = client.beta.threads.messages.list(thread_id=thread_id)
-    last_message = next(
-        (m for m in reversed(messages.data) if m.role == "assistant"), None)
+# ROUTE /health
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
 
-    return jsonify({"response": last_message.content[0].text.value if last_message else "Erreur : aucune réponse."})
-
+# ROUTE /update_memory
 @app.route("/update_memory", methods=["POST"])
 def update_memory():
-    data = request.json
-    user_id = data.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Missing user_id"}), 400
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        memory_fields = {
+            "relation_intent": data.get("relation_intent"),
+            "love_name": data.get("love_name"),
+            "love_style": data.get("love_style"),
+            "status": data.get("status")
+        }
 
-    updates = {
-        "prenom_aime": data.get("prenom_aime"),
-        "situation": data.get("situation"),
-        "intention": data.get("intention"),
-        "style": data.get("style")
-    }
-    # Supprime les champs vides
-    updates = {k: v for k, v in updates.items() if v is not None}
-    supabase.table("user_settings").upsert({**updates, "user_id": user_id}).execute()
-    return jsonify({"message": "Mémoire mise à jour avec succès."})
+        response = supabase.table("user_settings").upsert({**memory_fields, "user_id": user_id}).execute()
+        return jsonify({"status": "success", "data": response.data})
+    except Exception as e:
+        logging.error(f"Erreur /update_memory : {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"message": "Bienvenue sur l'API de IAmour V6 ULTIMATE++"})
+# ExÃ©cution locale pour debug ou via Gunicorn en prod
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=8080)
