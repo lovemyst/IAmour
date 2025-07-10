@@ -5,106 +5,119 @@ import os
 import time
 import json
 from supabase import create_client, Client
+import logging
+import sys
 
+# Configuration pour Railway (logs)
+logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
+sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
+
+# Initialisation Flask
 app = Flask(__name__)
 CORS(app)
 
-# 🔐 Configuration des clés API
+# Clés et variables d'environnement
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Clients API
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 🔁 Récupération ou création de thread utilisateur
+# 🔁 Gestion des threads
 def get_or_create_thread(user_id):
-    result = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
-    if result.data:
-        return result.data[0]["thread_id"]
+    response = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
+    if response.data:
+        return response.data[0]["thread_id"]
     else:
         thread = client.beta.threads.create()
-        supabase.table("user_threads").insert({
-            "user_id": user_id,
-            "thread_id": thread.id,
-            "created_at": "now()"
-        }).execute()
+        supabase.table("user_threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
         return thread.id
 
-# 🧠 Récupération mémoire utilisateur
+# 📥 Mémoire affective
 def get_user_memory(user_id):
-    result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-    if result.data:
-        return result.data[0]
+    response = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+    if response.data:
+        return response.data[0]
     return {}
 
-# 🔍 Détermine si on doit utiliser la mémoire
-def should_use_memory(message):
-    neutres = ["salut", "coucou", "hey", "hello", "yo", "bonjour"]
-    return not (message.strip().lower() in neutres or len(message.split()) <= 3)
+def update_user_memory(user_id, field, value):
+    memory = get_user_memory(user_id)
+    if memory:
+        supabase.table("user_memory").update({field: value}).eq("user_id", user_id).execute()
+    else:
+        supabase.table("user_memory").insert({"user_id": user_id, field: value}).execute()
 
-# 🧠 Extraction automatique depuis le message utilisateur
-def extract_memory_from_message(message):
-    prompt = f'''
-Tu es un détective émotionnel. Analyse le message et remplis ces 4 champs :
-- prénom de la personne aimée
-- situation amoureuse actuelle
-- intention affective de l'utilisateur
-- style relationnel recherché
+def extract_memory_fields(message):
+    memory = {}
+    if "je suis amoureux de" in message.lower():
+        split = message.lower().split("je suis amoureux de")
+        if len(split) > 1:
+            memory["prenom_aime"] = split[1].strip().split(" ")[0]
+    if "je veux une relation" in message.lower():
+        memory["intention"] = "relation"
+    if "je viens de rompre" in message.lower():
+        memory["situation_amoureuse"] = "rupture"
+    return memory
 
-Message : "{message}"
+# 📡 ROUTES
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
-Réponds au format JSON :
-{{
-  "prenom_aime": "...",
-  "situation_amour": "...",
-  "intention": "...",
-  "style_relationnel": "..."
-}}
-Si tu ne sais pas, mets "non précisé".
-'''
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    try:
-        return json.loads(completion.choices[0].message.content)
-    except:
-        return {
-            "prenom_aime": "non précisé",
-            "situation_amour": "non précisée",
-            "intention": "non précisée",
-            "style_relationnel": "non précisé"
-        }
+@app.route("/update_memory", methods=["POST"])
+def update_memory():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    updates = data.get("updates", {})
+    for field, value in updates.items():
+        update_user_memory(user_id, field, value)
+    return jsonify({"status": "memory updated"}), 200
 
-# 💬 Route principale
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
         data = request.get_json()
         user_id = data.get("user_id")
         message = data.get("message")
+        is_premium = data.get("is_premium", False)
         preferences = data.get("preferences", {})
-        assistant_id = ASSISTANT_ID_PREMIUM if data.get("premium") else ASSISTANT_ID_FREE
+
+        assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
         thread_id = get_or_create_thread(user_id)
+
+        # Mise à jour mémoire si détection automatique
+        extracted_memory = extract_memory_fields(message)
+        for field, value in extracted_memory.items():
+            update_user_memory(user_id, field, value)
+
+        # Mémoire utilisateur
         memory = get_user_memory(user_id)
-        use_memory = should_use_memory(message)
+        memory_string = json.dumps(memory, ensure_ascii=False)
 
-        instructions = f'''
-Tu es IAmour, une IA émotionnelle incarnée.
-Personnalité IA : {preferences.get("personnalite")}
-Tonalité : {preferences.get("tonalite")}
-Intensité : {preferences.get("intensite")}
-Longueur : {preferences.get("longueur")}
-Humeur : {preferences.get("humeur")}
-Prénom aimé : {memory.get("prenom_aime", "non précisé")}
-Situation amoureuse : {memory.get("situation_amour", "non précisée")}
-Intention : {memory.get("intention", "non précisée")}
-Style relationnel : {memory.get("style_relationnel", "non précisé")}
-'''
+        # Instructions dynamiques
+        instructions = f"""
+Tu es IAmour, une intelligence émotionnelle incarnée.
+Voici les préférences utilisateur :
+- Personnalité : {preferences.get("personnalite", "non précisée")}
+- Tonalité : {preferences.get("tonalite", "neutre")}
+- Intensité : {preferences.get("intensite", "moyenne")}
+- Humeur : {preferences.get("humeur", "neutre")}
+- Longueur : {preferences.get("longueur", "moyenne")}
 
+Mémoire émotionnelle disponible : {memory_string}
+
+Ta réponse doit être incarnée, émotionnelle, fidèle au style choisi, et adaptée au message reçu : "{message}"
+Respecte absolument la longueur demandée :
+- courte = max 2 phrases
+- moyenne = 3 à 5 phrases
+- longue = jusqu’à 10 phrases
+"""
+
+        # Envoi du message
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
@@ -117,54 +130,22 @@ Style relationnel : {memory.get("style_relationnel", "non précisé")}
             instructions=instructions
         )
 
-        # Polling
-        for _ in range(30):
+        # Attente de la complétion
+        while True:
             run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-            if run_status.status == "completed":
+            if run_status.status in ["completed", "failed", "cancelled"]:
                 break
-            time.sleep(1)
+            time.sleep(0.25)
 
         messages = client.beta.threads.messages.list(thread_id=thread_id)
-        response = messages.data[0].content[0].text.value
+        last_message = messages.data[0].content[0].text.value
 
-        if use_memory:
-            extracted = extract_memory_from_message(message)
-            if any(val != "non précisé" and val != "non précisée" for val in extracted.values()):
-                existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-                if existing.data:
-                    supabase.table("user_memory").update(extracted).eq("user_id", user_id).execute()
-                else:
-                    extracted["user_id"] = user_id
-                    supabase.table("user_memory").insert(extracted).execute()
+        return jsonify({"response": last_message}), 200
 
-        return jsonify({"response": response})
     except Exception as e:
+        logging.error(f"Erreur /chat : {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/update_memory", methods=["POST"])
-def update_memory():
-    try:
-        data = request.get_json()
-        user_id = data.get("user_id")
-        fields = {
-            "prenom_aime": data.get("prenom_aime"),
-            "situation_amour": data.get("situation_amour"),
-            "intention": data.get("intention"),
-            "style_relationnel": data.get("style_relationnel"),
-            "updated_at": "now()"
-        }
-
-        existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-        if existing.data:
-            supabase.table("user_memory").update(fields).eq("user_id", user_id).execute()
-        else:
-            fields["user_id"] = user_id
-            supabase.table("user_memory").insert(fields).execute()
-
-        return jsonify({"success": True, "message": "Mémoire mise à jour"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "OK"}), 200
+# Lancement local (si besoin)
+if __name__ == "__main__":
+    app.run(debug=True)
