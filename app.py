@@ -7,16 +7,15 @@ import json
 from supabase import create_client, Client
 import logging
 import sys
-import uuid
 
-# Configuration pour Railway
+# Setup log Railway
 logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
 sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuration OpenAI et Supabase
+# Env variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
@@ -26,66 +25,73 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Vérification ou création d’un thread utilisateur
-def get_or_create_thread(user_id):
-    thread_data = supabase.table("threads").select("thread_id").eq("user_id", user_id).limit(1).execute()
-    if thread_data.data:
-        return thread_data.data[0]["thread_id"]
-    else:
-        thread = client.beta.threads.create()
-        supabase.table("threads").insert({
-            "user_id": user_id,
-            "thread_id": thread.id,
-            "created_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        }).execute()
-        return thread.id
+# Route /health
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
-# Extraction mémoire affective depuis un message utilisateur
-def extract_memory_info(message):
-    fields = {
-        "prenom_aime": ["s’appelle", "prénom", "elle s'appelle", "il s'appelle"],
-        "situation_amour": ["rupture", "en couple", "célibataire", "séparation"],
-        "style_relationnel": ["je suis anxieux", "je suis évitant", "dépendant affectif", "attachement", "style relationnel"],
-        "intention": ["je veux trouver l’amour", "je veux l’oublier", "je veux me reconstruire", "je veux draguer", "je veux comprendre"]
-    }
-    memory = {}
-    for key, keywords in fields.items():
-        for kw in keywords:
-            if kw.lower() in message.lower():
-                memory[key] = message
-                break
-    return memory
+# Fonction thread
+def get_or_create_thread(user_id):
+    try:
+        response = supabase.table("user_threads").select("*").eq("user_id", user_id).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]["thread_id"]
+        else:
+            thread = client.beta.threads.create()
+            supabase.table("user_threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
+            return thread.id
+    except Exception as e:
+        logging.error(f"Erreur get_or_create_thread: {e}")
+        raise e
+
+# Fonction mÃ©moire Ã©motionnelle
+def store_memory(user_id, memory):
+    try:
+        supabase.table("user_memory").upsert({
+            "user_id": user_id,
+            "prenom_aime": memory.get("prenom_aime"),
+            "situation_amoureuse": memory.get("situation_amoureuse"),
+            "intention_relationnelle": memory.get("intention_relationnelle"),
+            "style_relationnel": memory.get("style_relationnel")
+        }).execute()
+    except Exception as e:
+        logging.error(f"Erreur mÃ©moire Supabase: {e}")
+
+@app.route("/update_memory", methods=["POST"])
+def update_memory():
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id")
+        memory = data.get("memory", {})
+        store_memory(user_id, memory)
+        return jsonify({"status": "MÃ©moire mise Ã  jour"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
-        data = request.json
+        data = request.get_json()
         message = data.get("message", "")
-        user_id = data.get("user_id")
-        preferences = data.get("preferences", {})
+        user_id = data.get("user_id", "")
         premium = data.get("premium", False)
+        preferences = data.get("preferences", {})
 
-        if not user_id:
-            return jsonify({"error": "user_id manquant"}), 400
+        if not message or not user_id:
+            return jsonify({"error": "Message ou user_id manquant"}), 400
 
         assistant_id = ASSISTANT_ID_PREMIUM if premium else ASSISTANT_ID_FREE
         thread_id = get_or_create_thread(user_id)
 
-        memory_update = extract_memory_info(message)
-        if memory_update:
-            existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-            if existing.data:
-                supabase.table("user_memory").update(memory_update).eq("user_id", user_id).execute()
-            else:
-                memory_update["user_id"] = user_id
-                supabase.table("user_memory").insert(memory_update).execute()
-
-        instructions = f"""Tu es IAmour, l’IA de l’amour. Adapte-toi à chaque utilisateur.
-Tonalité : {preferences.get('tonalite')}
-Intensité : {preferences.get('intensite')}
-Longueur : {preferences.get('longueur')}
-Personnalité IA : {preferences.get('personnalite')}
-Humeur utilisateur : {preferences.get('humeur')}"""
+        # Construction du prompt dynamique
+        instructions = f"""Tu es l'IA IAmour, spÃ©cialisÃ©e dans les Ã©motions humaines. 
+Tu dois t'adapter au style suivant :
+- PersonnalitÃ© : {preferences.get("personnalite", "lover")}
+- TonalitÃ© : {preferences.get("tonalite", "doux")}
+- IntensitÃ© : {preferences.get("intensite", "moyenne")}
+- Longueur : {preferences.get("longueur", "moyenne")}
+- Humeur : {preferences.get("humeur", "calme")}
+RÃ©ponds de maniÃ¨re profondÃ©ment humaine, intuitive, chaleureuse et adaptÃ©e."""
 
         client.beta.threads.messages.create(
             thread_id=thread_id,
@@ -99,50 +105,22 @@ Humeur utilisateur : {preferences.get('humeur')}"""
             instructions=instructions
         )
 
-        timeout = time.time() + 20
-        while time.time() < timeout:
+        while True:
             run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
             if run_status.status == "completed":
                 break
-            time.sleep(1)
+            elif run_status.status == "failed":
+                return jsonify({"error": "Ãchec de gÃ©nÃ©ration OpenAI"}), 500
+            time.sleep(0.5)
 
         messages = client.beta.threads.messages.list(thread_id=thread_id)
-        last_message = next((m for m in reversed(messages.data) if m.role == "assistant"), None)
-        if not last_message:
-            return jsonify({"error": "Aucune réponse générée"}), 500
+        last_response = next((m for m in reversed(messages.data) if m.role == "assistant"), None)
 
-        return jsonify({"response": last_message.content[0].text.value})
+        if not last_response:
+            return jsonify({"error": "Aucune rÃ©ponse gÃ©nÃ©rÃ©e"}), 500
 
-    except Exception as e:
-        logging.error(f"Erreur dans /chat : {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/update_memory", methods=["POST"])
-def update_memory():
-    try:
-        data = request.json
-        user_id = data.get("user_id")
-        updates = data.get("memory", {})
-
-        if not user_id or not updates:
-            return jsonify({"error": "Données manquantes"}), 400
-
-        existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-        if existing.data:
-            supabase.table("user_memory").update(updates).eq("user_id", user_id).execute()
-        else:
-            updates["user_id"] = user_id
-            supabase.table("user_memory").insert(updates).execute()
-
-        return jsonify({"status": "ok"})
+        return jsonify({"response": last_response.content[0].text.value}), 200
 
     except Exception as e:
-        logging.error(f"Erreur dans /update_memory : {e}")
+        logging.error(f"ð¥ ERREUR /chat: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-if __name__ == "__main__":
-    app.run(debug=True)
