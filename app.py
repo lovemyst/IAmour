@@ -2,145 +2,148 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import openai
 import os
-import json
 import time
-import uuid
+import json
+from supabase import create_client, Client
 import logging
 import sys
-from supabase import create_client, Client
-from datetime import datetime
 
-# Configure les logs Railway
+# Configuration des logs Railway
 logging.getLogger('gunicorn.error').setLevel(logging.DEBUG)
-sys.excepthook = lambda exctype, value, tb: logging.error(f"Unhandled exception: {value}")
+sys.excepthook = lambda exctype, value, traceback: logging.error(f"Unhandled exception: {value}")
 
+# Initialisation
 app = Flask(__name__)
 CORS(app)
 
-# Clés d'API et Supabase
+# ENV VARS
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID_FREE = os.getenv("ASSISTANT_ID_FREE")
 ASSISTANT_ID_PREMIUM = os.getenv("ASSISTANT_ID_PREMIUM")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Clients
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# UUID checker strict
-def is_valid_uuid(value):
-    try:
-        uuid_obj = uuid.UUID(str(value))
-        return str(uuid_obj) == str(value).lower()
-    except ValueError:
-        return False
-
-# Thread management
+# THREAD
 def get_or_create_thread(user_id):
-    response = supabase.table("user_threads").select("thread_id").eq("user_id", user_id).execute()
-    if response.data:
-        return response.data[0]["thread_id"]
+    existing_thread = supabase.table("threads").select("thread_id").eq("user_id", user_id).execute()
+    if existing_thread.data:
+        return existing_thread.data[0]["thread_id"]
     else:
         thread = client.beta.threads.create()
-        thread_id = thread.id
-        supabase.table("user_threads").insert({"user_id": user_id, "thread_id": thread_id}).execute()
-        return thread_id
+        supabase.table("threads").insert({"user_id": user_id, "thread_id": thread.id}).execute()
+        return thread.id
 
-# Mémoire émotionnelle
-def get_memory(user_id):
-    response = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
-    if response.data:
-        return response.data[0]
-    return {}
-
-def extract_memory_from_text(text):
-    memory = {}
-    if "elle s'appelle" in text.lower():
-        prenom = text.split("elle s'appelle")[-1].split()[0]
-        memory["prenom_aime"] = prenom.strip(",.?! ")
-    if "je veux le/la reconquérir" in text.lower():
-        memory["intention"] = "reconquête"
-    if "je suis en couple" in text.lower():
-        memory["statut"] = "en_couple"
-    if "j'ai été blessé(e)" in text.lower():
-        memory["style_relationnel"] = "méfiant"
-    return memory
-
-def update_memory(user_id, memory_dict):
-    existing = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+# 🧠 Mémoire affective
+def update_user_memory(user_id, memory_data):
+    existing = supabase.table("user_memory").select("user_id").eq("user_id", user_id).execute()
     if existing.data:
-        supabase.table("user_memory").update(memory_dict).eq("user_id", user_id).execute()
+        supabase.table("user_memory").update(memory_data).eq("user_id", user_id).execute()
     else:
-        memory_dict["user_id"] = user_id
-        supabase.table("user_memory").insert(memory_dict).execute()
+        memory_data["user_id"] = user_id
+        supabase.table("user_memory").insert(memory_data).execute()
 
-# Route IA principale
+# ✨ Extraction mémoire automatique
+def extract_memory_data(message):
+    mémoire = {}
+    if "je veux récupérer" in message.lower() or "je veux reconquérir" in message.lower():
+        mémoire["intention"] = "reconquête"
+    if "je suis en couple" in message.lower():
+        mémoire["situation_amour"] = "en_couple"
+    if "je suis célibataire" in message.lower():
+        mémoire["situation_amour"] = "célibataire"
+    if "je veux du sérieux" in message.lower():
+        mémoire["intention"] = "relation_sérieuse"
+    for phrase in message.split():
+        if phrase.lower() in ["léa", "emma", "julie", "camille"]:
+            mémoire["prenom_aime"] = phrase
+    return mémoire
+
+# /chat
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json()
-    user_id = data.get("user_id")
-    message = data.get("message")
-    preferences = data.get("preferences", {})
-    premium = data.get("premium", False)
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        message = data.get("message")
+        preferences = data.get("preferences", {})
+        is_premium = data.get("premium", False)
 
-    if not user_id or not is_valid_uuid(user_id):
-        return jsonify({"error": "user_id is missing or invalid. Please login or register."}), 400
+        if not user_id or not message:
+            return jsonify({"error": "user_id et message requis"}), 400
 
-    assistant_id = ASSISTANT_ID_PREMIUM if premium else ASSISTANT_ID_FREE
-    thread_id = get_or_create_thread(user_id)
-    memory = get_memory(user_id)
+        assistant_id = ASSISTANT_ID_PREMIUM if is_premium else ASSISTANT_ID_FREE
+        thread_id = get_or_create_thread(user_id)
 
-    extracted = extract_memory_from_text(message)
-    if extracted:
-        update_memory(user_id, extracted)
-        memory.update(extracted)
+        # Mémorisation dynamique
+        memory_extracted = extract_memory_data(message)
+        if memory_extracted:
+            update_user_memory(user_id, memory_extracted)
 
-    instructions = f"""Tu es IAmour, une IA émotionnelle incarnée.
-Comporte-toi avec la personnalité sélectionnée : {preferences.get("personnalité", "lover romantique")}.
-Adapte-toi à l’humeur : {preferences.get("humeur", "neutre")}, à l’intensité : {preferences.get("intensité", "moyenne")}, au ton : {preferences.get("tonalité", "doux")}, et à la longueur : {preferences.get("longueur", "moyenne")}.
-Mémoire affective actuelle : {json.dumps(memory, ensure_ascii=False)}.
-Réponds toujours avec une présence réelle, intuitive, humaine, vivante. Jamais robotique. Tu incarnes l'amour."""
+        # Préférences
+        instructions = f"""
+Tu es l'IA IAmour. Adapte-toi à ces préférences :
+Personnalité : {preferences.get("personnalité", "lover")}
+Humeur : {preferences.get("humeur", "calme")}
+Tonalité : {preferences.get("tonalité", "douce")}
+Longueur : {preferences.get("longueur", "moyenne")}
+Intensité émotionnelle : {preferences.get("intensité", "moyenne")}
+Respecte toujours la longueur : courte = max 2 phrases, moyenne = 3 à 5, longue = jusqu’à 10.
+Réponds comme une vraie présence humaine.
+"""
 
-    client.beta.threads.messages.create(
-        thread_id=thread_id,
-        role="user",
-        content=message
-    )
+        # Ajout du message
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=message
+        )
 
-    run = client.beta.threads.runs.create_and_poll(
-        thread_id=thread_id,
-        assistant_id=assistant_id,
-        instructions=instructions
-    )
+        # Lancement de l’IA
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            instructions=instructions
+        )
 
-    if run.status != "completed":
-        return jsonify({"error": "La génération a échoué"}), 500
+        # Attente de la réponse
+        while True:
+            run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+            if run_status.status == "completed":
+                break
+            elif run_status.status == "failed":
+                return jsonify({"error": "Échec du run"}), 500
+            time.sleep(1)
 
-    messages = client.beta.threads.messages.list(thread_id=thread_id)
-    last_message = next(
-        (msg for msg in reversed(messages.data) if msg.role == "assistant"), None
-    )
+        # Récupération
+        messages = client.beta.threads.messages.list(thread_id=thread_id)
+        ai_message = next((m.content[0].text.value for m in messages.data[::-1] if m.role == "assistant"), None)
 
-    return jsonify({"response": last_message.content[0].text.value})
+        return jsonify({"response": ai_message}), 200
 
+    except Exception as e:
+        logging.error(f"Erreur dans /chat : {str(e)}")
+        return jsonify({"error": "Erreur interne serveur"}), 500
+
+# /update_memory
+@app.route("/update_memory", methods=["POST"])
+def update_memory():
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        memory_data = data.get("memory", {})
+        if not user_id:
+            return jsonify({"error": "user_id requis"}), 400
+        update_user_memory(user_id, memory_data)
+        return jsonify({"message": "Mémoire mise à jour"}), 200
+    except Exception as e:
+        logging.error(f"Erreur /update_memory : {str(e)}")
+        return jsonify({"error": "Erreur interne"}), 500
+
+# /health
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
-
-@app.route("/update_memory", methods=["POST"])
-def update_memory_route():
-    data = request.get_json()
-    user_id = data.get("user_id")
-    memory = data.get("memory")
-
-    if not user_id or not is_valid_uuid(user_id):
-        return jsonify({"error": "user_id invalide (UUID attendu)"}), 400
-
-    if not memory:
-        return jsonify({"error": "memory manquant"}), 400
-
-    update_memory(user_id, memory)
-    return jsonify({"status": "memory updated"}), 200
-
-if __name__ == "__main__":
-    app.run(debug=True)
+    return jsonify({"status": "ok"}), 200
