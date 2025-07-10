@@ -129,3 +129,8 @@ def update_memory():
 @app.route("/health", methods=["GET"])
 def health():
     return "OK", 200
+
+# ✅ Bloc pour Railway
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
